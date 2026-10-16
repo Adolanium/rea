@@ -123,6 +123,29 @@ describe("browser observation sensitive surfaces and retention", () => {
     expect(sanitized.redacted).toBe(true);
   });
 
+  it("ends special-scheme userinfo removal at a backslash authority delimiter", () => {
+    const value = String.raw`https://u:p@host.test\x@y.test/path?q=1#f`;
+    const sanitized = sanitizeBrowserUrl(value);
+    expect(sanitized).toEqual({
+      url: String.raw`https://host.test\x@y.test/path?q=1#f`,
+      origin: "https://host.test",
+      query_parameter_names: ["q"],
+      redacted: true,
+    });
+    expect(new URL(sanitized.url).host).toBe(new URL(value).host);
+    expect(sanitizeEndpointCandidate(value)).toBe(sanitized.url);
+    expect(sanitizeBrowserUrl("https://a@b@host.test/x").url).toBe(
+      "https://host.test/x",
+    );
+    expect(sanitizeBrowserUrl("wss://u:p@host.test:8443/socket").url).toBe(
+      "wss://host.test:8443/socket",
+    );
+    // A non-special scheme keeps a backslash inside its authority.
+    expect(sanitizeBrowserUrl(String.raw`git://u:p\x@host.test/r`).url).toBe(
+      "git://host.test/r",
+    );
+  });
+
   it("retains ordinary query values and malformed URL diagnostics", () => {
     const longName = `a${"x".repeat(400)}`;
     const parameters = [
