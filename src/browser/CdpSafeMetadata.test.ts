@@ -143,6 +143,49 @@ describe("safe CDP response metadata", () => {
   });
 });
 
+describe("repeated CDP response header fields", () => {
+  it("parses each repeated Link and CSP field that CDP joins with newlines", () => {
+    const captured = safeResponseMetadata(
+      "request-3",
+      `${origin}/api`,
+      {
+        headers: {
+          Link: '</agent>; rel="mcp"\n</style.css>; rel=preload; as=style',
+          "Content-Security-Policy":
+            "default-src 'self'\nscript-src https://private.example.test, img-src data:",
+          "Referrer-Policy": "no-referrer\nstrict-origin",
+        },
+      },
+      new Set([origin]),
+    );
+
+    expect(captured.response.links).toEqual([
+      expect.objectContaining({ href: `${origin}/agent`, rel: ["mcp"] }),
+      expect.objectContaining({
+        href: `${origin}/style.css`,
+        rel: ["preload"],
+        as: "style",
+      }),
+    ]);
+    expect(captured.agentHints).toEqual([
+      expect.objectContaining({
+        mechanism: "link_rel",
+        declaration: "mcp",
+        url: `${origin}/agent`,
+      }),
+    ]);
+    expect(captured.response.csp.directives).toEqual([
+      { name: "default-src", sources: [{ kind: "keyword", value: "'self'" }] },
+      {
+        name: "script-src",
+        sources: [{ kind: "external_origin", value: null }],
+      },
+      { name: "img-src", sources: [{ kind: "scheme", value: "data:" }] },
+    ]);
+    expect(captured.response.policies.referrer_policy).toBe("strict-origin");
+  });
+});
+
 describe("safe CDP response metadata CSP sources", () => {
   it("classifies scheme-less CSP host sources by their own host, not the page origin", () => {
     const captured = safeResponseMetadata(

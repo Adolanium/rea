@@ -17,6 +17,8 @@ export const safeResponseMetadata = (
   readonly agentHints: AgentHint[];
 } => {
   const headers = normalizedHeaders(response.headers);
+  const field = (name: string): string | undefined =>
+    headers.get(name)?.join(", ");
   const links = parseLinks(headers.get("link"), url, allowedOrigins);
   const csp = parseCsp(
     headers.get("content-security-policy"),
@@ -39,20 +41,18 @@ export const safeResponseMetadata = (
       request_id: requestId,
       url,
       mime_type: boundedHeader(cdpStringValue(response.mimeType)),
-      content_length: contentLength(headers.get("content-length")),
-      content_encoding: boundedHeader(headers.get("content-encoding")),
+      content_length: contentLength(field("content-length")),
+      content_encoding: boundedHeader(field("content-encoding")),
       csp,
       links,
       policies: {
-        coop: policyToken(headers.get("cross-origin-opener-policy")),
-        coep: policyToken(headers.get("cross-origin-embedder-policy")),
-        corp: policyToken(headers.get("cross-origin-resource-policy")),
-        referrer_policy: referrerPolicy(headers.get("referrer-policy")),
-        x_content_type_options: policyToken(
-          headers.get("x-content-type-options"),
-        ),
+        coop: policyToken(field("cross-origin-opener-policy")),
+        coep: policyToken(field("cross-origin-embedder-policy")),
+        corp: policyToken(field("cross-origin-resource-policy")),
+        referrer_policy: referrerPolicy(field("referrer-policy")),
+        x_content_type_options: policyToken(field("x-content-type-options")),
         permissions_policy_features: permissionFeatures(
-          headers.get("permissions-policy"),
+          field("permissions-policy"),
         ),
       },
     },
@@ -60,10 +60,16 @@ export const safeResponseMetadata = (
   };
 };
 
-const normalizedHeaders = (value: unknown): ReadonlyMap<string, string> => {
+/**
+ * Lowercase header names and keep every field value. CDP joins repeated
+ * response header fields with "\n", so each line is a separate field value.
+ */
+const normalizedHeaders = (
+  value: unknown,
+): ReadonlyMap<string, readonly string[]> => {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     return new Map();
-  const headers = new Map<string, string>();
+  const headers = new Map<string, string[]>();
   for (const [name, raw] of Object.entries(value)) {
     const normalized = name.toLowerCase();
     const header =
@@ -72,20 +78,30 @@ const normalizedHeaders = (value: unknown): ReadonlyMap<string, string> => {
         : typeof raw === "number" && Number.isFinite(raw)
           ? String(raw)
           : undefined;
-    if (header !== undefined) headers.set(normalized, header);
+    if (header !== undefined)
+      headers.set(normalized, [
+        ...(headers.get(normalized) ?? []),
+        ...header.split("\n"),
+      ]);
   }
   return headers;
 };
 
+/**
+ * Each field value is a CSP3 serialized policy list whose policies are
+ * separated by commas. Directives of every policy are returned in order; the
+ * schema does not record which policy a directive came from.
+ */
 const parseCsp = (
-  value: string | undefined,
+  values: readonly string[] | undefined,
   baseUrl: string,
   allowedOrigins: ReadonlySet<string>,
 ): ResponseMetadata["csp"] => {
   const directives: ResponseMetadata["csp"]["directives"] = [];
   let nonceCount = 0;
   let hashCount = 0;
-  for (const rawDirective of (value ?? "").split(";")) {
+  const policies = (values ?? []).flatMap((value) => value.split(","));
+  for (const rawDirective of policies.flatMap((policy) => policy.split(";"))) {
     const [rawName, ...tokens] = rawDirective.trim().split(/\s+/u);
     const name = (rawName ?? "").toLowerCase();
     if (!/^[a-z][a-z0-9\x2d]*$/u.test(name)) continue;
@@ -180,12 +196,14 @@ const schemeOf = (baseUrl: string): string | undefined => {
 };
 
 const parseLinks = (
-  value: string | undefined,
+  values: readonly string[] | undefined,
   baseUrl: string,
   allowedOrigins: ReadonlySet<string>,
 ): LinkMetadata[] => {
   const links: LinkMetadata[] = [];
-  for (const entry of splitLinkHeader(value ?? "")) {
+  for (const entry of (values ?? []).flatMap((value) =>
+    splitLinkHeader(value),
+  )) {
     const match = /^\s*<([^>]*)>(.*)$/u.exec(entry);
     if (match === null) continue;
     const parameters = linkParameters(match[2] ?? "");
