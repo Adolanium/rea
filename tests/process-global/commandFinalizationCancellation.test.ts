@@ -15,8 +15,10 @@ import {
 
 const host = vi.hoisted(() => ({
   listeners: new Map<string, () => void>(),
+  registrations: 0,
   exitCode: undefined as number | undefined,
   on(signal: string, listener: () => void) {
+    this.registrations += 1;
     this.listeners.set(signal, listener);
   },
   off(signal: string, listener: () => void) {
@@ -24,6 +26,8 @@ const host = vi.hoisted(() => ({
   },
 }));
 
+// This file lives in process-global because the mock applies only to a fresh
+// module graph; a shared cli-boundary worker may already have loaded src/cli.
 vi.mock("../../src/cli/commandCancellation.js", async (importOriginal) => {
   const original =
     await importOriginal<
@@ -40,6 +44,7 @@ vi.mock("../../src/cli/commandCancellation.js", async (importOriginal) => {
 afterEach(() => {
   vi.restoreAllMocks();
   host.listeners.clear();
+  host.registrations = 0;
   host.exitCode = undefined;
 });
 
@@ -101,6 +106,7 @@ it.each([
     }
     const result = JSON.parse(output);
     expect(closed).toBe(true);
+    expect(host.registrations).toBeGreaterThan(0);
     expect(host.listeners.size).toBe(0);
     if (scenario === "control") {
       expect(result.normalized_result).toEqual(value);
