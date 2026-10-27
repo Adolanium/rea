@@ -110,13 +110,9 @@ const projectIssue = (
       },
     ];
   if (issue.code === "too_small")
-    return [
-      boundedIssue(path, "minimum", numericBound(issue.minimum), issue),
-    ];
+    return [boundedIssue(path, "minimum", numericBound(issue.minimum), issue)];
   if (issue.code === "too_big")
-    return [
-      boundedIssue(path, "maximum", numericBound(issue.maximum), issue),
-    ];
+    return [boundedIssue(path, "maximum", numericBound(issue.maximum), issue)];
   if (issue.code === "invalid_format")
     return [
       {
