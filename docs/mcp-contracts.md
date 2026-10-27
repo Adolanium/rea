@@ -26,6 +26,10 @@ can be passed directly to `compare_functions`, and `inspect_artifact` Evidence
 to `compare_artifacts`. Use `get_evidence_bundle` when the task needs broader
 retained session history or an explicit bundle for transfer.
 
+`compare_artifacts` can also resolve an artifact summary to its exact retained
+parent in the session. Supported historical summaries keep their original
+Evidence identity and omissions; a missing or mismatched parent is rejected.
+
 `analyze_function` does not deliver its complete record by default. Without
 `detail`, it retains the complete dossier in the session and returns
 `inspect_analysis_view` summary Evidence whose
@@ -1487,6 +1491,8 @@ validates every result before delivery. On catalogs large enough that full
 input schemas alone approach the frame limit, keep the input profile at its
 `compact` default as well; with full input schemas the advertisement is
 dominated by the input side.
+The full input profile has no one-megabyte catalog-frame guarantee, including
+when output schemas are omitted.
 
 Only client-side schema discovery and validation are reduced or omitted, so
 hosts using these profiles should rely on REA's validation and retain their

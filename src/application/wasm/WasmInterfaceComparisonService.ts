@@ -8,11 +8,7 @@ import {
   compareWasmInterfacesInputSchema,
   wasmInterfaceComparisonSchema,
 } from "../../contracts/wasm/wasmComparisonContracts.js";
-import {
-  createEvidence,
-  parseEvidence,
-  type Evidence,
-} from "../../domain/evidence.js";
+import { createEvidence, type Evidence } from "../../domain/evidence.js";
 import {
   wasmArtifactSchema,
   wasmArtifactMatchesSubject,
@@ -27,60 +23,64 @@ import {
 import { fixedAllowanceOptions } from "../../domain/fixedAllowanceRemediation.js";
 import { AnalysisError } from "../../domain/analysisErrorBase.js";
 import { analysisInputErrorFromIssues } from "../../domain/inputIssueProjection.js";
-import { err, type Result } from "../../domain/result.js";
+import { err, ok, type Result } from "../../domain/result.js";
 import {
   resolvePairedEvidenceRequest,
   type EvidenceLookup,
 } from "../EvidenceInputResolver.js";
 import type { ExecutionOptions } from "../AnalysisProvider.js";
 import type { z } from "zod";
+import { safeParseEvidence } from "../../domain/evidenceValidation.js";
 import { completeProviderEvidence } from "../ProviderOperationExecution.js";
 
 const OPERATION = "compare_wasm_interfaces";
-/** Attribute a rejected side to the input argument that supplied it. */
 const parseInspection = (
   raw: unknown,
   side: "left" | "right",
-): { evidence: Evidence; result: WasmArtifact } => {
-  try {
-    return parseSideInspection(raw);
-  } catch (cause: unknown) {
-    if (cause instanceof AnalysisError) throw cause;
-    throw new AnalysisInputError(OPERATION, { cause }, [
-      {
-        path: [side],
-        reason: "invalid_value",
-        message: cause instanceof Error ? cause.message : String(cause),
-      },
-    ]);
-  }
-};
-
-const parseSideInspection = (
-  raw: unknown,
-): { evidence: Evidence; result: WasmArtifact } => {
-  const evidence = parseEvidence(raw);
+): Result<{ evidence: Evidence; result: WasmArtifact }, AnalysisInputError> => {
+  const authenticated = safeParseEvidence(raw);
+  if (!authenticated.ok)
+    return inspectionInputFailure(authenticated.error, side);
+  const evidence = authenticated.value;
   if (evidence.operation !== "inspect_wasm_artifact")
-    throw new TypeError("Expected complete inspect_wasm_artifact Evidence");
-  const result = wasmArtifactSchema.parse(evidence.normalized_result);
+    return inspectionInputFailure(
+      new TypeError("Expected complete inspect_wasm_artifact Evidence"),
+      side,
+    );
+  const parsed = wasmArtifactSchema.safeParse(evidence.normalized_result);
+  if (!parsed.success) return inspectionInputFailure(parsed.error, side);
+  const result = parsed.data;
   if (
     !wasmArtifactMatchesSubject(
       result.artifact,
       evidence.subject === null
         ? null
         : {
-            path: evidence.subject.local_path,
             sha256: evidence.subject.digest.sha256,
             format: evidence.subject.format,
           },
     ) ||
     evidence.parameters.path !== result.artifact.path
   )
-    throw new TypeError(
-      "WASM Evidence subject/selection does not match normalized artifact identity",
+    return inspectionInputFailure(
+      new TypeError(
+        "WASM Evidence subject/selection does not match normalized artifact identity",
+      ),
+      side,
     );
-  return { evidence, result };
+  return ok({ evidence, result });
 };
+
+/** Attribute a rejected side to the input argument that supplied it. */
+const inspectionInputFailure = (
+  cause: Error,
+  side: "left" | "right",
+): Result<never, AnalysisInputError> =>
+  err(
+    new AnalysisInputError(OPERATION, { cause }, [
+      { path: [side], reason: "invalid_value", message: cause.message },
+    ]),
+  );
 
 /** Compare only producer-owned typed facts; no raw WAT or original file is reread. */
 export const compareWasmInterfaces = async (
@@ -108,8 +108,12 @@ export const compareWasmInterfaces = async (
   try {
     await setImmediate();
     assertActive();
-    const left = parseInspection(resolved.value.left, "left");
-    const right = parseInspection(resolved.value.right, "right");
+    const parsedLeft = parseInspection(resolved.value.left, "left");
+    if (!parsedLeft.ok) return parsedLeft;
+    const parsedRight = parseInspection(resolved.value.right, "right");
+    if (!parsedRight.ok) return parsedRight;
+    const left = parsedLeft.value;
+    const right = parsedRight.value;
     const scope = parsed.data.scope;
     const selected = (entry: WasmInterfaceEntry): boolean =>
       scope === "both" ||
@@ -275,14 +279,6 @@ export const compareWasmInterfaces = async (
     return completeProviderEvidence(evidence, options?.signal);
   } catch (cause: unknown) {
     if (cause instanceof AnalysisError) return err(cause);
-    return err(
-      new AnalysisInputError(OPERATION, { cause }, [
-        {
-          path: [],
-          reason: "invalid_value",
-          message: cause instanceof Error ? cause.message : String(cause),
-        },
-      ]),
-    );
+    throw cause;
   }
 };
