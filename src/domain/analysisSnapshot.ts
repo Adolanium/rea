@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import canonicalize from "canonicalize";
 import { z } from "zod";
 
-import { evidenceSubjectDeclarationShapes } from "./evidenceSubject.js";
+import { withEvidenceSubjectDeclaration } from "./evidenceSubject.js";
 
 import {
   compareUnicodeCodePoints,
@@ -73,23 +73,29 @@ const formatSchema = z.enum([
   "hsp",
   "app-pack",
   "asar",
+  "ines",
   "godot-pck",
+  "unityfs",
   "dmg",
   "pkg",
+  "intel-hex",
+  "srec",
+  "esp-image",
+  "uf2",
+  "dfuse",
+  "esp-flash-image",
+  "fit",
   "plist",
   "javascript",
   "source-map",
+  "uimage",
 ]);
 const kindSchema = z.enum(["executable", "database", "archive", "artifact"]);
 const subjectBaseSchema = z.object({
   path: localPathStringSchema,
   sha256: digestSchema,
 });
-const subjectSchema = z.discriminatedUnion("format", [
-  subjectBaseSchema.extend(evidenceSubjectDeclarationShapes[0]),
-  subjectBaseSchema.extend(evidenceSubjectDeclarationShapes[1]),
-  subjectBaseSchema.extend(evidenceSubjectDeclarationShapes[2]),
-]);
+const subjectSchema = withEvidenceSubjectDeclaration(subjectBaseSchema);
 const targetIdentitySchema = z.object({
   sha256: digestSchema,
   kind: kindSchema,
@@ -99,7 +105,10 @@ const targetSchema = z.discriminatedUnion("format", [
   targetIdentitySchema.extend({
     format: z.enum(
       formatSchema.options.filter(
-        (format) => format !== "raw-binary" && format !== "gamecube-dol",
+        (format) =>
+          format !== "raw-binary" &&
+          format !== "gamecube-dol" &&
+          format !== "esp-flash-image",
       ),
     ),
     architecture: architectureSchema
@@ -117,6 +126,14 @@ const targetSchema = z.discriminatedUnion("format", [
     kind: z.literal("executable"),
     architecture: z.literal("powerpc"),
     entry_point: rawBinaryEntryPointSchema,
+  }),
+  // The caller's inputs select how the dump is read, so they are identity.
+  targetIdentitySchema.extend({
+    format: z.literal("esp-flash-image"),
+    kind: z.literal("archive"),
+    architecture: z.null(),
+    flash_offset: z.number().int().min(0).max(0xffff_ffff).nullable(),
+    partition_table_offset: z.number().int().min(0).max(0xffff_ffff).nullable(),
   }),
 ]);
 const bindingSchema = z
@@ -386,12 +403,21 @@ export const snapshotTarget = (target: BinaryTarget): AnalysisSnapshotTarget =>
           format: target.format,
           entry_point: target.entryPoint,
         }
-      : {
-          sha256: target.sha256,
-          kind: target.kind,
-          architecture: target.architecture ?? null,
-          format: target.format,
-        };
+      : target.format === "esp-flash-image"
+        ? {
+            sha256: target.sha256,
+            kind: target.kind,
+            architecture: null,
+            format: target.format,
+            flash_offset: target.espFlash.flashOffset,
+            partition_table_offset: target.espFlash.partitionTableOffset,
+          }
+        : {
+            sha256: target.sha256,
+            kind: target.kind,
+            architecture: target.architecture ?? null,
+            format: target.format,
+          };
 
 /** Build the immutable provider/profile binding used by a cached snapshot. */
 export const snapshotBinding = (
@@ -416,7 +442,12 @@ export const snapshotMatchesTarget = (
       snapshot.entry_point === target.entryPoint)) &&
   (snapshot.format !== "gamecube-dol" ||
     (target.format === "gamecube-dol" &&
-      snapshot.entry_point === target.entryPoint));
+      snapshot.entry_point === target.entryPoint)) &&
+  (snapshot.format !== "esp-flash-image" ||
+    (target.format === "esp-flash-image" &&
+      snapshot.flash_offset === target.espFlash.flashOffset &&
+      snapshot.partition_table_offset ===
+        target.espFlash.partitionTableOffset));
 
 /** Compare a snapshot binding with the selected concrete analysis profile. */
 export const snapshotMatchesProfile = (
